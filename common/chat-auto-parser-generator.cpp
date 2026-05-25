@@ -372,20 +372,17 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
         auto                  params     = func.contains("parameters") ? func.at("parameters") : json::object();
         const auto &          properties = params.contains("properties") ? params.at("properties") : json::object();
 
-        std::set<std::string> required;
-        if (params.contains("required")) {
-            params.at("required").get_to(required);
-        }
-
         auto schema_info = common_schema_info();
         schema_info.resolve_refs(params);
 
-        // Build parser for each argument, separating required and optional
-        std::vector<common_peg_parser> required_parsers;
-        std::vector<common_peg_parser> optional_parsers;
+        // Build parser for each named argument. Tagged arguments carry their
+        // parameter name in-band, so accept known parameters in any order.
+        std::vector<common_peg_parser> arg_parsers;
+        size_t required_count = 0;
+        if (params.contains("required")) {
+            required_count = params.at("required").size();
+        }
         for (const auto & [param_name, param_schema] : properties.items()) {
-            bool is_required = required.find(param_name) != required.end();
-
             auto arg =
                 p.tool_arg(p.tool_arg_open(arguments.name_prefix + p.tool_arg_name(p.literal(param_name)) +
                                            arguments.name_suffix) +
@@ -398,29 +395,20 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
                            p.tool_arg_close(p.literal(arguments.value_suffix)));
 
             auto named_arg = p.rule("tool-" + name + "-arg-" + param_name, arg);
-            if (is_required) {
-                required_parsers.push_back(named_arg);
-            } else {
-                optional_parsers.push_back(named_arg);
-            }
+            arg_parsers.push_back(named_arg);
         }
 
-        // Build required arg sequence in definition order
+        // Accept any known named argument in any order. Presence of required
+        // arguments is validated by downstream tool/schema handling instead of
+        // by this grammar; this avoids rejecting valid tagged calls that choose
+        // a different named-parameter order.
         common_peg_parser args_seq = p.eps();
-        for (size_t i = 0; i < required_parsers.size(); i++) {
-            if (i > 0) {
-                args_seq = args_seq + p.space();
+        if (!arg_parsers.empty()) {
+            common_peg_parser any_arg = p.choice();
+            for (const auto & arg : arg_parsers) {
+                any_arg |= arg;
             }
-            args_seq = args_seq + required_parsers[i];
-        }
-
-        // Build optional args with flexible ordering
-        if (!optional_parsers.empty()) {
-            common_peg_parser any_opt = p.choice();
-            for (const auto & opt : optional_parsers) {
-                any_opt |= opt;
-            }
-            args_seq = args_seq + p.repeat(p.space() + any_opt, 0, -1);
+            args_seq = p.repeat(any_arg + p.space(), required_count, -1);
         }
 
         if (!arguments.start.empty()) {
@@ -445,7 +433,7 @@ common_peg_parser analyze_tools::build_tool_parser_tag_tagged(parser_build_conte
 
         // Only peek for an arg tag when there are required args that must follow.
         // When all args are optional, the model may emit no arg tags at all (#20650).
-        auto atomic_peek = (!arguments.name_prefix.empty() && !required_parsers.empty()) ?
+        auto atomic_peek = (!arguments.name_prefix.empty() && !arg_parsers.empty()) ?
             std::optional(p.peek(p.literal(arguments.name_prefix))) : std::nullopt;
         auto func_parser = build_func_parser(p, name, call_id_section, have_call_id, args_seq, atomic_peek);
         tool_choice |= p.rule("tool-" + name, func_parser);

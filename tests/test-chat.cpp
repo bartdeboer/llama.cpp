@@ -1930,6 +1930,26 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(
+               "Need to inspect the current directory.\n"
+               "<tool_call>\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "Done.")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ run_in_terminal_tool })
+            .expect_reasoning("Need to inspect the current directory.")
+            .expect_content("Done.")
+            .expect_tool_calls({
+                { "run_in_terminal", R"({"command": "pwd"})", {} },
+            })
+            .run();
+
+        tst.test(
                "<tool_call>\n"
                "<function=edit>\n"
                "<parameter=newString>\n"
@@ -1974,8 +1994,8 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
             .parallel_tool_calls(true)
             .tools({ run_in_terminal_tool })
-            .expect_reasoning("Need the directory.Need the files.")
-            .expect_content("Done.")
+            .expect_reasoning("Need the directory.")
+            .expect_content("Need the files.\nDone.")
             .expect_tool_calls({
                 { "run_in_terminal", R"({"command": "pwd"})", {} },
                 { "run_in_terminal", R"({"command": "ls"})", {} },

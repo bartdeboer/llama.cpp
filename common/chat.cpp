@@ -1109,10 +1109,18 @@ static common_chat_params common_chat_params_init_tagged_thinking_tools(const co
         const int max_calls = inputs.parallel_tool_calls ? -1 : 1;
         auto tool_calls     = p.repeat(tool_call + p.space(), 1, max_calls);
 
-        auto tool_suffix = p.trigger_rule("tool-call",
-            tool_calls +
-            p.zero_or_more(p.content(p.until("<tool_call>")) + tool_calls) +
-            p.content(p.rest()));
+        p.rule("tool-tail", [&]() {
+            auto content_until_boundary = p.content(p.until_one_of({"<tool_call>", "</think>"}));
+            return p.choice({
+                p.literal("</think>") + p.space() + p.content(p.rest()),
+                content_until_boundary + p.choice({
+                    p.ref("tool-call"),
+                    p.literal("</think>") + p.space() + p.content(p.rest()),
+                    p.content(p.rest()),
+                }),
+            });
+        });
+        auto tool_suffix = p.trigger_rule("tool-call", tool_calls + p.ref("tool-tail"));
 
         auto outside = p.choice({
             p.content(p.until("<tool_call>")) + tool_suffix,
@@ -1128,10 +1136,10 @@ static common_chat_params common_chat_params_init_tagged_thinking_tools(const co
             p.optional(p.literal("\n"));
 
         auto reasoning_then_boundary =
-            p.zero_or_more(reasoning_before_boundary + tool_calls) +
             reasoning_before_boundary +
             p.choice({
                 p.literal("</think>") + p.space() + outside,
+                tool_suffix,
                 p.content(p.rest()),
             });
 

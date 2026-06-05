@@ -2387,6 +2387,24 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 })
                 .run();
 
+            no_prefill.test(
+                   "I need to run a terminal command.\n"
+                   "<tool_call>\n"
+                   "<function=run_in_terminal>\n"
+                   "<parameter=command>\n"
+                   "pwd\n"
+                   "</parameter>\n"
+                   "</function>\n"
+                   "</tool_call>")
+                .enable_thinking(true)
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .tools({ run_in_terminal_tool })
+                .expect_reasoning("I need to run a terminal command.")
+                .expect_tool_calls({
+                    { "run_in_terminal", R"({"command": "pwd"})", {} },
+                })
+                .run();
+
             no_prefill.test("Final answer without thinking.")
                 .enable_thinking(true)
                 .reasoning_format(COMMON_REASONING_FORMAT_AUTO)

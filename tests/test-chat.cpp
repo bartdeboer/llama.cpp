@@ -1909,6 +1909,80 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .run();
 
         tst.test(
+               "Need to inspect the current directory.\n"
+               "<tool_call>\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "</think>\n"
+               "Done.")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ run_in_terminal_tool })
+            .expect_reasoning("Need to inspect the current directory.")
+            .expect_content("Done.")
+            .expect_tool_calls({
+                { "run_in_terminal", R"({"command": "pwd"})", {} },
+            })
+            .run();
+
+        tst.test(
+               "<tool_call>\n"
+               "<function=edit>\n"
+               "<parameter=newString>\n"
+               "new text\n"
+               "</parameter>\n"
+               "<parameter=oldString>\n"
+               "old text\n"
+               "</parameter>\n"
+               "<parameter=filename>\n"
+               "foo.cpp\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>")
+            .enable_thinking(false)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .tools({ edit_tool })
+            .expect_tool_calls({
+                { "edit", R"({"newString": "new text", "oldString": "old text", "filename": "foo.cpp"})", {} },
+            })
+            .run();
+
+        tst.test(
+               "Need the directory.\n"
+               "<tool_call>\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "pwd\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "Need the files.\n"
+               "<tool_call>\n"
+               "<function=run_in_terminal>\n"
+               "<parameter=command>\n"
+               "ls\n"
+               "</parameter>\n"
+               "</function>\n"
+               "</tool_call>\n"
+               "</think>\n"
+               "Done.")
+            .enable_thinking(true)
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .parallel_tool_calls(true)
+            .tools({ run_in_terminal_tool })
+            .expect_reasoning("Need the directory.Need the files.")
+            .expect_content("Done.")
+            .expect_tool_calls({
+                { "run_in_terminal", R"({"command": "pwd"})", {} },
+                { "run_in_terminal", R"({"command": "ls"})", {} },
+            })
+            .run();
+
+        tst.test(
                "I need to output the invoice details in JSON\n"
                "</think>\n\n"
                R"({"amount": 123.45, "date": "2025-12-03"})")

@@ -1050,6 +1050,118 @@ static common_chat_params common_chat_params_init_ministral_3(const common_chat_
     return data;
 }
 
+static common_chat_params common_chat_params_init_tagged_thinking_tools(const common_chat_template & tmpl,
+                                                                const autoparser::generation_params & inputs) {
+    common_chat_params data;
+
+    const bool has_tools         = inputs.tools.is_array() && !inputs.tools.empty();
+    const bool extract_reasoning = inputs.reasoning_format != COMMON_REASONING_FORMAT_NONE;
+
+    data.supports_thinking  = true;
+    data.thinking_start_tag = "<think>";
+    data.thinking_end_tag   = "</think>";
+    data.prompt             = common_chat_template_direct_apply(tmpl, inputs);
+    data.generation_prompt  = common_chat_template_generation_prompt(tmpl, inputs);
+    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.preserved_tokens   = {
+        "<think>",
+        "</think>",
+        "<tool_call>",
+        "</tool_call>",
+    };
+
+    if (!has_tools || inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_NONE) {
+        return data;
+    }
+
+    auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
+        auto generation_prompt = p.literal(data.generation_prompt);
+        auto tool_choices = p.choice();
+
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            const auto   name     = function.at("name").get<std::string>();
+
+            auto arg_choices = p.choice();
+            foreach_parameter(function, [&](const std::string & prop_name, const json & prop_schema, bool) {
+                auto value = prop_schema.value("type", "") == "string" ?
+                    p.tool_arg_string_value(p.until("</parameter>")) :
+                    p.tool_arg_value(p.until("</parameter>"));
+                auto arg = p.tool_arg(
+                    p.tool_arg_open(p.literal("<parameter=") + p.tool_arg_name(p.literal(prop_name)) + p.literal(">")) +
+                    value +
+                    p.tool_arg_close(p.literal("</parameter>")));
+                arg_choices |= p.rule("tool-" + name + "-arg-" + prop_name, arg);
+            });
+
+            auto args = p.tool_args(p.zero_or_more(arg_choices + p.space()));
+            auto func = p.tool(
+                p.tool_open(p.literal("<function=") + p.tool_name(p.literal(name)) + p.literal(">")) +
+                p.space() + args + p.space() +
+                p.tool_close(p.literal("</function>")));
+
+            tool_choices |= p.rule("tool-" + name, func);
+        });
+
+        auto tool_call =
+            p.literal("<tool_call>") + p.space() + tool_choices + p.space() + p.literal("</tool_call>");
+
+        const int max_calls = inputs.parallel_tool_calls ? -1 : 1;
+        auto tool_calls     = p.repeat(tool_call + p.space(), 1, max_calls);
+
+        auto tool_suffix = p.trigger_rule("tool-call",
+            tool_calls +
+            p.zero_or_more(p.content(p.until("<tool_call>")) + tool_calls) +
+            p.content(p.rest()));
+
+        auto outside = p.choice({
+            p.content(p.until("<tool_call>")) + tool_suffix,
+            p.content(p.rest()),
+        });
+
+        if (!extract_reasoning || !inputs.enable_thinking) {
+            return generation_prompt + outside;
+        }
+
+        auto reasoning_before_boundary =
+            p.reasoning(p.until_one_of({"</think>", "\n</think>", "\n<tool_call>"})) +
+            p.optional(p.literal("\n"));
+
+        auto reasoning_then_boundary =
+            p.zero_or_more(reasoning_before_boundary + tool_calls) +
+            reasoning_before_boundary +
+            p.choice({
+                p.literal("</think>") + p.space() + outside,
+                p.content(p.rest()),
+            });
+
+        auto immediate_tool = tool_suffix;
+
+        return generation_prompt + p.choice({
+            immediate_tool,
+            reasoning_then_boundary,
+        });
+    });
+
+    data.parser       = parser.save();
+    data.grammar_lazy = inputs.tool_choice == COMMON_CHAT_TOOL_CHOICE_AUTO;
+    data.grammar      = build_grammar([&](const common_grammar_builder & builder) {
+        foreach_function(inputs.tools, [&](const json & tool) {
+            const auto & function = tool.at("function");
+            auto         schema   = function.at("parameters");
+            builder.resolve_refs(schema);
+        });
+        parser.build_grammar(builder, data.grammar_lazy);
+    });
+    if (data.grammar_lazy) {
+        data.grammar_triggers = {
+            { COMMON_GRAMMAR_TRIGGER_TYPE_WORD, "<tool_call>" },
+        };
+    }
+
+    return data;
+}
+
 static common_chat_params common_chat_params_init_gpt_oss(const common_chat_template &    tmpl,
                                                           const autoparser::generation_params & inputs) {
     common_chat_params data;
@@ -2273,6 +2385,20 @@ std::optional<common_chat_params> common_chat_try_specialized_template(
         src.find("[ARGS]") != std::string::npos && src.find("[CALL_ID]") == std::string::npos) {
         LOG_DBG("Using specialized template: Ministral/Magistral Large 3\n");
         return common_chat_params_init_ministral_3(tmpl, params);
+    }
+
+    // Tagged thinking/tool protocol: reasoning uses <think>...</think> and tools use
+    // <tool_call><function=name><parameter=arg>...</parameter></function></tool_call>.
+    if (params.tools.is_array() && !params.tools.empty() &&
+        params.tool_choice != COMMON_CHAT_TOOL_CHOICE_NONE &&
+        src.find("<think>") != std::string::npos &&
+        src.find("</think>") != std::string::npos &&
+        src.find("<tool_call>") != std::string::npos &&
+        src.find("</tool_call>") != std::string::npos &&
+        src.find("<function=") != std::string::npos &&
+        src.find("<parameter=") != std::string::npos) {
+        LOG_DBG("Using specialized template: tagged thinking tools\n");
+        return common_chat_params_init_tagged_thinking_tools(tmpl, params);
     }
 
     // GPT-OSS - has unique channel-based structure that needs dedicated handler

@@ -1062,8 +1062,9 @@ static common_chat_params common_chat_params_init_tagged_thinking_tools(const co
     data.thinking_end_tag   = "</think>";
     data.prompt             = common_chat_template_direct_apply(tmpl, inputs);
     data.generation_prompt  = common_chat_template_generation_prompt(tmpl, inputs);
-    data.format             = COMMON_CHAT_FORMAT_PEG_NATIVE;
-    data.preserved_tokens   = {
+    data.format                 = COMMON_CHAT_FORMAT_PEG_NATIVE;
+    data.strict_eof_on_complete = true;
+    data.preserved_tokens       = {
         "<think>",
         "</think>",
         "<tool_call>",
@@ -1137,13 +1138,25 @@ static common_chat_params common_chat_params_init_tagged_thinking_tools(const co
             p.reasoning(p.until_one_of({"</think>", "\n</think>", "\n<tool_call>"})) +
             p.optional(p.literal("\n"));
 
-        auto reasoning_then_boundary =
+        auto reasoning_until_tool =
+            p.peek(p.until_one_of({"</think>", "\n</think>", "\n<tool_call>"}) + p.literal("\n<tool_call>")) +
             reasoning_before_boundary +
-            p.choice({
-                p.literal("</think>") + p.space() + outside,
-                tool_suffix,
-                p.content(p.rest()),
-            });
+            tool_suffix;
+
+        auto reasoning_until_close =
+            p.peek(p.until_one_of({"</think>", "\n</think>", "\n<tool_call>"}) + p.choice({
+                p.literal("</think>"),
+                p.literal("\n</think>"),
+            })) +
+            reasoning_before_boundary +
+            p.literal("</think>") + p.space() + outside;
+
+        auto reasoning_then_boundary = p.choice({
+            tool_suffix,
+            reasoning_until_tool,
+            reasoning_until_close,
+            p.content(p.rest()),
+        });
 
         auto immediate_tool = tool_suffix;
 
@@ -2723,6 +2736,15 @@ common_chat_msg common_chat_peg_parse(const common_peg_arena &          src_pars
 
     common_peg_parse_context ctx(effective_input, flags);
     auto result = parser.parse(ctx);
+
+    // Streaming parses are lenient so an unterminated prefix can still produce deltas.
+    // Some complete parses intentionally use EOF as a boundary; retry those strictly
+    // when requested so "until"/"rest" parsers can commit at the actual end.
+    if (!is_partial && params.strict_eof_on_complete && result.need_more_input()) {
+        flags = common_peg_parse_flags(flags & ~COMMON_PEG_PARSE_FLAG_LENIENT);
+        ctx = common_peg_parse_context(effective_input, flags);
+        result = parser.parse(ctx);
+    }
 
     if (result.fail()) {
         // During partial parsing, return partial results if any AST nodes were captured

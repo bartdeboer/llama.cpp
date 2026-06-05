@@ -2212,6 +2212,13 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .expect_content("Final answer without tools.")
             .run();
 
+        tst.test("🤖 Final Report\n\nAll tests pass.")
+            .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+            .enable_thinking(true)
+            .tools({ run_in_terminal_tool })
+            .expect_content("🤖 Final Report\n\nAll tests pass.")
+            .run();
+
         // Continuation tests
         tst.test("world!\nWhat's up?")
             .reasoning_format(COMMON_REASONING_FORMAT_AUTO)

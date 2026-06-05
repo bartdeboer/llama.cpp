@@ -1074,6 +1074,8 @@ static common_chat_params common_chat_params_init_tagged_thinking_tools(const co
         return data;
     }
 
+    const bool starts_in_reasoning = string_ends_with(data.generation_prompt, "<think>\n");
+
     auto parser = build_chat_peg_parser([&](common_chat_peg_builder & p) {
         auto generation_prompt = p.literal(data.generation_prompt);
         auto tool_choices = p.choice();
@@ -1145,8 +1147,19 @@ static common_chat_params common_chat_params_init_tagged_thinking_tools(const co
 
         auto immediate_tool = tool_suffix;
 
+        auto generated_reasoning = p.literal("<think>") + p.space() + reasoning_then_boundary;
+
+        if (!starts_in_reasoning) {
+            return generation_prompt + p.choice({
+                generated_reasoning,
+                immediate_tool,
+                outside,
+            });
+        }
+
         return generation_prompt + p.choice({
             immediate_tool,
+            generated_reasoning,
             reasoning_then_boundary,
         });
     });

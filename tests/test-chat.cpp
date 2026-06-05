@@ -1361,6 +1361,11 @@ class peg_tester {
         template_path_(template_path),
         detailed_debug_(detailed_debug) {}
 
+    explicit peg_tester(common_chat_templates_ptr tmpls, const std::string & template_path, const bool detailed_debug = false) :
+        tmpls_(std::move(tmpls)),
+        template_path_(template_path),
+        detailed_debug_(detailed_debug) {}
+
     const std::string & template_path() const { return template_path_; }
 
     peg_test_builder test(const std::string & input);
@@ -2092,7 +2097,7 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
             .tools({
                 special_function_tool
         })
-            .expect_reasoning("<think>\n\n")
+            .expect_reasoning("")
             .expect_tool_calls({ { "special_function", "{\"arg1\": 1}", "" } })
             .run();
 
@@ -2311,6 +2316,75 @@ static void test_template_output_peg_parsers(bool detailed_debug) {
                 .expect_tool_calls({
                     { "run_in_terminal", R"({"command": "pwd"})", {} },
                 })
+                .run();
+        }
+
+        {
+            auto src = read_file("models/templates/Qwen3.5-4B.jinja");
+            string_replace_all(src,
+                "{%- if add_generation_prompt %}\n"
+                "    {{- '<|im_start|>assistant\\n' }}\n"
+                "    {%- if enable_thinking is defined and enable_thinking is false %}\n"
+                "        {{- '<think>\\n\\n</think>\\n\\n' }}\n"
+                "    {%- else %}\n"
+                "        {{- '<think>\\n' }}\n"
+                "    {%- endif %}\n"
+                "{%- endif %}",
+                "{%- if add_generation_prompt %}\n"
+                "    {{- '<|im_start|>assistant\\n' }}\n"
+                "{%- endif %}");
+
+            auto no_prefill = peg_tester(
+                common_chat_templates_ptr(common_chat_templates_init(/* model= */ nullptr, src)),
+                "models/templates/Qwen3.5-4B-no-prefill-think.jinja",
+                detailed_debug);
+
+            no_prefill.test(
+                   "<think>\n"
+                   "I need to run a terminal command.\n"
+                   "</think>\n\n"
+                   "<tool_call>\n"
+                   "<function=run_in_terminal>\n"
+                   "<parameter=command>\n"
+                   "pwd\n"
+                   "</parameter>\n"
+                   "</function>\n"
+                   "</tool_call>")
+                .enable_thinking(true)
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .tools({ run_in_terminal_tool })
+                .expect_reasoning("I need to run a terminal command.")
+                .expect_tool_calls({
+                    { "run_in_terminal", R"({"command": "pwd"})", {} },
+                })
+                .run();
+
+            no_prefill.test(
+                   "<think>\n"
+                   "I need to run a terminal command.\n"
+                   "<tool_call>\n"
+                   "<function=run_in_terminal>\n"
+                   "<parameter=command>\n"
+                   "pwd\n"
+                   "</parameter>\n"
+                   "</function>\n"
+                   "</tool_call>\n"
+                   "Done.")
+                .enable_thinking(true)
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .tools({ run_in_terminal_tool })
+                .expect_reasoning("I need to run a terminal command.")
+                .expect_content("Done.")
+                .expect_tool_calls({
+                    { "run_in_terminal", R"({"command": "pwd"})", {} },
+                })
+                .run();
+
+            no_prefill.test("Final answer without thinking.")
+                .enable_thinking(true)
+                .reasoning_format(COMMON_REASONING_FORMAT_AUTO)
+                .tools({ run_in_terminal_tool })
+                .expect_content("Final answer without thinking.")
                 .run();
         }
     }
